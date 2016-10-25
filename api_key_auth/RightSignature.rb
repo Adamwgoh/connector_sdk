@@ -21,7 +21,7 @@
   },
 
   object_definitions: {
-    
+
     document: {
       fields: ->(){
         [
@@ -80,10 +80,10 @@
     get_document_details_by_id: {
       input_fields: ->(){
         [
-          { name: "documentid", label:"Document ID"} 
+          { name: "documentid", label:"Document ID"}
          ]
       },
-      
+
       execute: ->(connection, input){
         documents = get("https://rightsignature.com/api/documents/#{input['documentid']}.json")["document"]
       },
@@ -95,43 +95,52 @@
   },
 
   triggers: {
+
     new_signed_document: {
-      type: :paging_desc, 
-      
       input_fields: ->(){
-        [
-        	{ name: "since", type: :timestamp}
-        ]
+        [	{ name: "since", type: :timestamp}]
       },
-      
-      poll: ->(connection, input, page){
 
-        updated_since = page || input['since'].to_date.strftime("%Y-%m-%d") || Time.now.strftime("%Y-%m-%d")
-        url = "https://rightsignature.com/api/documents.json?state=completed&updated_since=#{updated_since}"
-				
-        documents = get(url).params(range: updated_since)['page']['documents']
+      poll: ->(connection, input, page) {
+        if page.blank?
+          page = {}
+        end
+        updated_since = page[:time] || input['since'].to_date.strftime("%Y-%m-%d") || Time.now.strftime("%Y-%m-%d")
+        puts (updated_since)
+        url = "https://rightsignature.com/api/documents.json?state=completed"
+				page[:pageno] ||= 1
+        raw = get(url).params(range: updated_since, page: page[:pageno])
+        documents = raw['page']['documents']
+        total_pages = raw['page']['total_pages']
+        current_page = raw['page']['current_page']
+        next_poll_obj = {}
 
-        
-        	updated_since = Time.now.to_date.strftime("%Y-%m-%d")
+        if documents.present? and total_pages > current_page
+          next_poll_obj[:pageno] = page[:pageno] + 1
+          puts next_poll_obj[:pageno]
+          next_poll_obj[:time] = updated_since
+        else
+        	next_poll_obj[:time] = (input['since'].to_date.strftime("%Y-%m-%d").to_date + 1.days).strftime("%Y-%m-%d")
+        end
+        puts next_poll_obj
+        puts (updated_since < Time.now.strftime("%Y-%m-%d"))
 
-#         updated_since = documents.last['completed_at'].to_date.strftime("%Y-%m-%d") unless documents.blank?
-        
         {
           events: documents,
-          next_page: updated_since
+          next_page: next_poll_obj,
+          can_poll_more: (current_page < total_pages or updated_since < Time.now.strftime("%Y-%m-%d"))
         }
-
       },
-      
       dedup: ->(document){
 
-      	document['guid']  
+      	document['guid']
       },
-      
+
       output_fields: ->(object_definitions){
          object_definitions['document']
       }
     }
+
     },
 
   pick_lists: {
